@@ -1,38 +1,28 @@
-version: "3.8"
+# ---------- Build stage ----------
+FROM maven:3.9-eclipse-temurin-17 AS build
+WORKDIR /app
 
-services:
-  posdb:
-    image: mysql:8.0
-    container_name: userdb
-    ports:
-      - "3301:3306"
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: userdb
-    healthcheck:
-      test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost"]
-      timeout: 10s
-      retries: 10
-      interval: 10s
-      start_period: 10s
-    networks:
-      - zosh
+# Copy only the files needed to resolve dependencies first (better layer caching)
+COPY pom.xml .
+COPY .mvn .mvn
+COPY mvnw .
+RUN mvn -B dependency:go-offline
 
-  pos-system:
-    image: your-dockerhub-username/pos-system:latest
-    depends_on:
-      posdb:
-        condition: service_healthy
-    ports:
-      - "5000:5000"
-    environment:
-      DB_HOST: posdb         # service name of the mysql container
-      DB_PORT: 3306
-      DB_NAME: userdb
-      DB_USERNAME: root
-      DB_PASSWORD: root
-    networks:
-      - zosh
+# Now copy the rest of the source and build
+COPY src ./src
+RUN mvn -B clean package -DskipTests
 
-networks:
-  zosh:
+# ---------- Runtime stage ----------
+FROM eclipse-temurin:17-jre-jammy AS runtime
+WORKDIR /app
+
+# Run as a non-root user
+RUN addgroup --system spring && adduser --system --ingroup spring spring
+USER spring:spring
+
+# Copy the built jar from the build stage
+COPY --from=build /app/target/*.jar app.jar
+
+EXPOSE 5000
+
+ENTRYPOINT ["java", "-jar", "app.jar"]
